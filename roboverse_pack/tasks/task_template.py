@@ -147,6 +147,95 @@ class MinimalTask(BaseTaskEnv):
 
 
 # ========================================
+# Working with TensorState
+# ========================================
+"""
+TensorState is the core data structure for accessing simulation states.
+It contains: objects, robots, cameras, sites, and extras.
+
+Structure:
+    states.objects[name]: ObjectState
+        - root_state: [num_envs, 13] = [pos(3), quat(4), lin_vel(3), ang_vel(3)]
+        - joint_pos: [num_envs, num_joints] (for articulated objects)
+        - joint_vel: [num_envs, num_joints] (for articulated objects)
+        - body_state: [num_envs, num_bodies, 13]
+        - body_names: list[str]
+
+    states.robots[name]: RobotState
+        - root_state: [num_envs, 13] = [pos(3), quat(4), lin_vel(3), ang_vel(3)]
+        - joint_pos: [num_envs, num_joints]
+        - joint_vel: [num_envs, num_joints]
+        - joint_pos_target: [num_envs, num_joints]
+        - joint_vel_target: [num_envs, num_joints]
+        - joint_effort_target: [num_envs, num_joints]
+        - body_state: [num_envs, num_bodies, 13]
+        - body_names: list[str]
+
+    states.cameras[name]: CameraState
+        - rgb: [num_envs, H, W, 3]
+        - depth: [num_envs, H, W]
+        - pos: [num_envs, 3]
+        - quat_world: [num_envs, 4]
+        - intrinsics: [num_envs, 3, 3]
+        - instance_id_seg: [num_envs, H, W]
+
+    states.extras: dict for custom data
+
+Common access patterns:
+    # Object state
+    object_pos = states.objects["target"].root_state[:, 0:3]  # [num_envs, 3]
+    object_quat = states.objects["target"].root_state[:, 3:7]  # [num_envs, 4]
+    object_lin_vel = states.objects["target"].root_state[:, 7:10]  # [num_envs, 3]
+    object_ang_vel = states.objects["target"].root_state[:, 10:13]  # [num_envs, 3]
+
+    # Robot state
+    robot_joint_pos = states.robots["franka"].joint_pos  # [num_envs, 9]
+    robot_joint_vel = states.robots["franka"].joint_vel  # [num_envs, 9]
+    robot_root_pos = states.robots["franka"].root_state[:, 0:3]  # [num_envs, 3]
+
+"""
+
+
+def flatten_observation(states) -> torch.Tensor:
+    """Example: Flatten TensorState into 1D observation tensor for RL algorithms.
+
+    This function demonstrates how to extract and concatenate various state
+    components into a single flat observation vector.
+
+    Args:
+        states: TensorState object from env.reset() or env.step()
+
+    Returns:
+        Flattened observation tensor of shape [num_envs, obs_dim]
+    """
+    # Extract object states
+    target_pos = states.objects["target"].root_state[:, 0:3]  # [num_envs, 3]
+    target_quat = states.objects["target"].root_state[:, 3:7]  # [num_envs, 4]
+
+    # Extract robot states
+    robot_joint_pos = states.robots["franka"].joint_pos  # [num_envs, num_joints=9]
+    robot_joint_vel = states.robots["franka"].joint_vel  # [num_envs, num_joints=9]
+
+    # Extract end-effector state (if needed)
+    ee_pos = states.sites["panda_hand"]["pos"]  # [num_envs, 3]
+
+    # Concatenate all components into flat observation
+    # Total dim: 3 + 4 + 9 + 9 + 3 = 28
+    obs = torch.cat(
+        [
+            target_pos,  # 3
+            target_quat,  # 4
+            robot_joint_pos,  # 9
+            robot_joint_vel,  # 9
+            ee_pos,  # 3
+        ],
+        dim=-1,
+    )
+
+    return obs  # shape: [num_envs, 28]
+
+
+# ========================================
 # Usage Examples
 # ========================================
 
@@ -161,13 +250,24 @@ if __name__ == "__main__":
     scenario = task_cls.scenario.update(num_envs=2, headless=True)
     env = task_cls(scenario=scenario, device=device)
 
-    # Reset environment
+    # Reset environment and get TensorState
     states, info = env.reset()
+
+    # Example 1: Access TensorState components directly
+    target_pos = states.objects["target"].root_state[:, 0:3]  # [2, 3]
+    robot_qpos = states.robots["franka"].joint_pos  # [2, 9]
+    ee_pos = states.sites["panda_hand"]["pos"]  # [2, 3]
+
+    # Example 2: Flatten observation for RL algorithms
+    obs_flat = flatten_observation(states)  # [2, 28]
 
     # Run a few steps
     for i in range(10):
         # Random actions for demonstration
         actions = torch.randn(2, 9, device=device)
         states, _, terminated, truncated, info = env.step(actions)
+
+        # Extract flattened observation each step
+        obs_flat = flatten_observation(states)
 
     env.close()
